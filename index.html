@@ -228,6 +228,19 @@
             vertical-align: middle;
         }
 
+        .tag-badge {
+            display: inline-block;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 999px;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .tag-badge.annuity { background-color: var(--accent-color); }
+        .tag-badge.principal { background-color: var(--success-color); }
+
         .history-body { font-size: 0.85rem; line-height: 1.6; color: #555; }
         .history-body .hl { font-weight: bold; color: var(--text-main); }
         .history-body .hl-red { font-weight: bold; color: #e74c3c; font-size: 0.95rem;}
@@ -292,6 +305,18 @@
             <label class="group-title" for="downPaymentPercent">頭期款成數 (%)</label>
             <input type="number" id="downPaymentPercent" value="10" min="0" max="100" step="1">
         </div>
+
+        <div class="form-group">
+            <label class="group-title">還款方式</label>
+            <div class="checkbox-group">
+                <label class="checkbox-item">
+                    <input type="radio" name="repaymentMethod" id="methodAnnuity" value="annuity" checked> 平均本息攤還
+                </label>
+                <label class="checkbox-item">
+                    <input type="radio" name="repaymentMethod" id="methodPrincipal" value="principal"> 平均本金攤還
+                </label>
+            </div>
+        </div>
     </div>
 
     <!-- 結果區塊 -->
@@ -320,11 +345,11 @@
 
         <div class="highlight-box">
             <div class="result-item">
-                <span class="result-label">初期總繳納<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(頭期款 + 總利息)</small></span>
+                <span class="result-label" id="resUpfrontLabel">初期總繳納<br><small id="resUpfrontNote" style="font-weight:normal; font-size:0.8rem; color:#666;">(頭期款 + 總利息)</small></span>
                 <span class="result-value" id="resUpfrontCost">0</span>
             </div>
             <div class="result-item" style="margin-top: 15px;">
-                <span class="result-label">後續每月繳納<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(純攤還本金：本金 ÷ 期數)</small></span>
+                <span class="result-label" id="resMonthlyLabel">後續每月繳納<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(純攤還本金：本金 ÷ 期數)</small></span>
                 <span class="result-value" id="resMonthlyPayment">0</span>
             </div>
         </div>
@@ -363,9 +388,31 @@
     const manualModeToggle = document.getElementById('manualModeToggle');
     const optionsPriceInput = document.getElementById('optionsPrice');
     const planAliasInput = document.getElementById('planAlias'); // 新增備忘錄輸入框
+    const methodAnnuity = document.getElementById('methodAnnuity');
+    const methodPrincipal = document.getElementById('methodPrincipal');
 
-    // 歷史紀錄陣列
+    // 歷史紀錄陣列（會從 localStorage 載入）
     let savedPlans = [];
+
+    function savePlansToStorage() {
+        try {
+            localStorage.setItem('carLoanSavedPlans', JSON.stringify(savedPlans));
+        } catch (e) {
+            console.warn('保存方案到 localStorage 失敗', e);
+        }
+    }
+
+    function loadPlansFromStorage() {
+        try {
+            const raw = localStorage.getItem('carLoanSavedPlans');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) savedPlans = parsed;
+            }
+        } catch (e) {
+            console.warn('讀取 localStorage 失敗', e);
+        }
+    }
 
     function formatCurrency(num) {
         return Math.round(num).toLocaleString('zh-TW') + ' 元';
@@ -397,14 +444,29 @@
         const principal = totalCarPrice - downPayment;
 
         const monthlyRate = annualRate / 100 / 12;
+        const useAnnuity = methodAnnuity.checked;
+
         let totalInterest = 0;
+        let monthlyPayment = 0;
+
+        let firstMonthPayment = 0;
         if (monthlyRate > 0) {
-            const pmt = principal * (monthlyRate * Math.pow(1 + monthlyRate, months)) / (Math.pow(1 + monthlyRate, months) - 1);
-            totalInterest = (pmt * months) - principal;
+            if (useAnnuity) {
+                const pmt = principal * (monthlyRate * Math.pow(1 + monthlyRate, months)) / (Math.pow(1 + monthlyRate, months) - 1);
+                totalInterest = (pmt * months) - principal;
+                monthlyPayment = pmt;
+                firstMonthPayment = pmt;
+            } else {
+                totalInterest = monthlyRate * principal * (months + 1) / 2;
+                monthlyPayment = principal / months; // average principal portion
+                firstMonthPayment = (principal / months) + (monthlyRate * principal);
+            }
+        } else {
+            monthlyPayment = principal / months;
+            firstMonthPayment = monthlyPayment;
         }
 
-        const upfrontCost = downPayment + totalInterest;
-        const monthlyPayment = principal / months;
+        const upfrontCost = useAnnuity ? (downPayment + totalInterest) : downPayment;
         const totalCost = totalCarPrice + totalInterest;
 
         const carPriceRatio = totalCost > 0 ? ((totalCarPrice / totalCost) * 100).toFixed(1) : 0;
@@ -421,7 +483,22 @@
         document.getElementById('resTotalInterest').textContent = formatCurrency(totalInterest);
         
         document.getElementById('resUpfrontCost').textContent = formatCurrency(upfrontCost);
-        document.getElementById('resMonthlyPayment').textContent = formatCurrency(monthlyPayment);
+        // update upfront note depending on repayment method
+        const upfrontLabel = document.getElementById('resUpfrontLabel');
+        if (useAnnuity) {
+            upfrontLabel.innerHTML = '初期總繳納<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(頭期款 + 總利息)</small>';
+        } else {
+            upfrontLabel.innerHTML = '初期總繳納<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(頭期款)</small>';
+        }
+        // show different monthly label/value depending on method
+        const monthlyLabel = document.getElementById('resMonthlyLabel');
+        if (useAnnuity) {
+            monthlyLabel.innerHTML = '每月應繳（等額本息）<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(每期金額含本金與利息)</small>';
+            document.getElementById('resMonthlyPayment').textContent = formatCurrency(firstMonthPayment);
+        } else {
+            monthlyLabel.innerHTML = '首期月繳（平均本金）<br><small style="font-weight:normal; font-size:0.8rem; color:#666;">(首期本金+首期利息，之後逐期遞減)</small>';
+            document.getElementById('resMonthlyPayment').textContent = formatCurrency(firstMonthPayment);
+        }
         document.getElementById('resTotalCost').textContent = formatCurrency(totalCost);
     }
 
@@ -435,7 +512,11 @@
 
         // 取得使用者輸入的備忘錄名稱，如果空白則自動賦予流水號名稱
         const inputAlias = planAliasInput.value.trim();
-        const alias = inputAlias !== '' ? inputAlias : `未命名方案 ${savedPlans.length + 1}`;
+        let alias = inputAlias !== '' ? inputAlias : `未命名方案 ${savedPlans.length + 1}`;
+        const tagShort = methodAnnuity.checked ? '[本息]' : '[本金]';
+        if (!alias.startsWith('[')) {
+            alias = `${tagShort} ${alias}`;
+        }
 
         const now = new Date();
         const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -452,10 +533,14 @@
             totalCost: document.getElementById('resTotalCost').textContent,
             upfrontCost: document.getElementById('resUpfrontCost').textContent,
             monthlyPayment: document.getElementById('resMonthlyPayment').textContent,
-            isManualMode: manualModeToggle.checked
+            isManualMode: manualModeToggle.checked,
+            repaymentMethod: methodAnnuity.checked ? '平均本息攤還' : '平均本金攤還'
         };
 
         savedPlans.unshift(plan);
+        // limit to 6 most recent
+        if (savedPlans.length > 6) savedPlans = savedPlans.slice(0, 6);
+        savePlansToStorage();
         renderHistory();
         
         // 儲存後清空輸入框，方便下次輸入
@@ -464,6 +549,7 @@
 
     function deletePlan(id) {
         savedPlans = savedPlans.filter(p => p.id !== id);
+        savePlansToStorage();
         renderHistory();
     }
 
@@ -477,8 +563,17 @@
         document.getElementById('loanMonths').value = plan.months;
         document.getElementById('downPaymentPercent').value = plan.downPct;
 
-        manualModeToggle.checked = true;
-        optionsPriceInput.readOnly = false;
+        manualModeToggle.checked = !!plan.isManualMode;
+        optionsPriceInput.readOnly = !manualModeToggle.checked;
+
+        // restore repayment method
+        if (plan.repaymentMethod === '平均本金攤還') {
+            methodAnnuity.checked = false;
+            methodPrincipal.checked = true;
+        } else {
+            methodAnnuity.checked = true;
+            methodPrincipal.checked = false;
+        }
 
         calculateLoan();
         window.scrollTo({ top: 0, behavior: 'smooth' }); 
@@ -496,7 +591,8 @@
             <div class="history-card">
                 <div class="history-header">
                     <div>
-                        <span class="alias-title" title="${p.alias}">📌 ${p.alias}</span> 
+                        <span class="tag-badge ${p.repaymentMethod === '平均本金攤還' ? 'principal' : 'annuity'}">${p.repaymentMethod === '平均本金攤還' ? '本金' : '本息'}</span>
+                        <span class="alias-title" title="${p.alias}">📌 ${p.alias}</span>
                         <span style="color:#7f8c8d; font-weight:normal; font-size:0.8rem; margin-left: 5px;">${p.time}</span>
                     </div>
                     <button class="btn-delete" onclick="deletePlan(${p.id})" title="刪除此紀錄">✖</button>
@@ -517,6 +613,14 @@
 
     [optPaint, optInterior, optWheels].forEach(chk => {
         chk.addEventListener('change', updateOptionsPrice);
+    });
+
+    [methodAnnuity, methodPrincipal].forEach(chk => {
+        chk.addEventListener('change', function() {
+            if (this === methodAnnuity && this.checked) methodPrincipal.checked = false;
+            if (this === methodPrincipal && this.checked) methodAnnuity.checked = false;
+            calculateLoan();
+        });
     });
 
     manualModeToggle.addEventListener('change', function() {
@@ -541,6 +645,7 @@
     });
 
     window.onload = function() {
+        loadPlansFromStorage();
         updateOptionsPrice(); 
         renderHistory(); 
     };
